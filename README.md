@@ -1,10 +1,10 @@
-## IDA Symbol Importer for WebTV (MSNTV) Builds
+## Symbol Importer for WebTV (MSNTV) Builds
 
-This is a basic Python script that helps you reverse engineer WebTV builds by processing one of the three types of symbol files using IDA.  It assigns names to classes, functions and variables provided you've properly loaded a WebTV build into IDA and have the correct symbol file.
+This is a basic Python script that helps you reverse engineer WebTV builds by processing one of the three types of symbol files using IDA or Ghidra.  It assigns names to classes, functions and variables provided you've properly loaded a WebTV build into IDA or Ghidra and have the correct symbol file.
 
 I created this so I could study the hardware of the older WebTV boxes in an attempt to create a MIPS Linux build that will run on these boxes.  These boxes were discontinued September 2013 by Microsoft and are fairly cheap to purchase.
 
-**NOTE:** Microsoft used a proprietary operating system on their older MIPS-based WebTV boxes.  This script wont work for Windows CE images used on the UltimateTV and the MSNTV2.  It's possible that you could use this on an UltimateTV's bootrom image since it used the propritary operating system but I don't have a symbol file to test.
+**NOTE:** Microsoft used a proprietary operating system on their older MIPS-based WebTV boxes.  This script won't work for Windows CE images used on the UltimateTV and the MSNTV2.  It's possible that you could use this on an UltimateTV's bootrom image since it used the propritary operating system but I don't have a symbol file to test.
 
 Builds for boxes I know should work:
 
