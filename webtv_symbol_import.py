@@ -1,183 +1,286 @@
-"""
-    IDA Symbol Importer for WebTV (MSNTV) Builds
+###
+#    Symbol Importer for WebTV (MSNTV) Builds
+#
+#    Author: Eric MacDonald <ubergeek03@gmail.com>
+#    Date: January 30th, 2015
+#
+# Imports WebTV ROM symbols into IDA, Ghidra or direct to a text file
+# @author Eric MacDonald (eMac)
+# @category Data
+# @keybinding 
+# @menupath Tools.WebTV Symbol Import
+# @toolbar 
+#
+###
 
-    This program is free software; you can redistribute it and/or
-    modify it under the terms of the GNU General Public License
-    as published by the Free Software Foundation; either version
-    3 of the License, or (at your option) any later version.
+import sys
+import os
+import struct
+import re
 
-    Author: Eric MacDonald <ubergeek03@gmail.com>
-    Date: January 30th, 2015
-"""
+#####################################################
+#####################################################
+#####################################################
+#####################################################
 
-import random
-from idaapi import * 
-import idautils
-import idc
+class OUTPUT_MODE(str):
+    DIRECT = 'DIRECT'
+    IDA    = 'IDA'
+    GHIDRA = 'GHIDRA'
 
-chunk_size = 4096
+class SYMBOL_DATA_TYPE(str):
+    UNKNOWN       = 'UNKNOWN'
+    EARLY_FORMAT1 = 'EARLY_FORMAT1'
+    PRODUCTION0   = 'PRODUCTION0'
+    PRODUCTION1   = 'PRODUCTION1'
+    
+#####################################################
+#####################################################
+#####################################################
+#####################################################
 
-# Reads the entire symbol file into memory.
-def read_symbol_file(file_name, chunk_size=chunk_size):
-    msg("Reading '" + file_name + "'\n")
+output_mode = OUTPUT_MODE.DIRECT
+
+try:
+    from idaapi import * 
+    import idautils
+    import idc
+
+    output_mode = OUTPUT_MODE.IDA
+except ImportError:
+    pass
+
+if output_mode == OUTPUT_MODE.DIRECT:
+    try:
+        from ghidra.program.model.symbol.SourceType import *
+
+        if createLabel:
+            output_mode = OUTPUT_MODE.GHIDRA
+    except:
+        pass
+
+#####################################################
+#####################################################
+#####################################################
+#####################################################
+
+def echo(message):
+    if output_mode == OUTPUT_MODE.IDA:
+        msg(message + "\n")
+    else:
+        print(message)
+
+def read_symbol_file(file_name):
+    echo("Reading '" + file_name)
 
     symbol_file_contents = open(file_name, "rb").read()
 
-    msg("Read " + str(len(symbol_file_contents)) + " bytes.\n")
+    echo("Read " + str(len(symbol_file_contents)) + " bytes.")
 
     return  symbol_file_contents
 
-# Process the read symbol file and return the list of names.
-def read_symbols(file_name, chunk_size=chunk_size):
-    symbols = {}
-
-    symbol_file_contents = read_symbol_file(file_name, chunk_size)
-    symbol_file_version = 0
-    class_names = []
-    object_names = {}
-
-    read_length = 0
-    file_length = len(symbol_file_contents)
-
-    msg("Parsing symbol file.\n")
-
-    # The symbol file format can be found by checking the first 4 bytes of
-    # the file (magic)
-    version_check = struct.unpack_from(">I", 
-        symbol_file_contents, read_length)[0]
-
-    # This seems to be the first symbol file format used.
-    # It starts with with a memory address (0x80XXXXXX)
-    if (version_check & 0xFF000000) == 0x80000000:
-        symbol_file_version = 0
-    # This is the most common symbol file format and seems to be what
-    # Microsoft settled on.
-    # Classes are named at the bottom of the file.
-    elif version_check == 1:
-        symbol_file_version = 1
-
-        class_start_index = symbol_file_contents.rfind(b"\x00")
-
-        if class_start_index > -1:
-            msg("Class name list at offset %x" % 
-                class_start_index + "\n")
-
-            # Class names are a newline terminated list at the bottom of the
-            # file.
-            class_names = \
-               symbol_file_contents[class_start_index:].split(b"\x0A")
-
-            file_length = class_start_index
-
-            msg("Reducing symbol file length to " + 
-                str(file_length) + " bytes.\n")
-
-        read_length = 12
-    # Odd format that isn't used much.  These files start with "TIMN"
-    # Probably named after "Tim Nicholas" who worked on parts of the WebTV
-    # debugger.
-    elif version_check == 0x54494D4E:
-        symbol_file_version = 2
-        read_length = 8
-
-    msg("Reading symbols for symbol file of version '" +
-        str(symbol_file_version) + "'.\n")
-
-    while(read_length < file_length):
-        object_address = 0
-        object_name = ""
-
-        # The memory address is always a 4-byte little-endian unsigned
-        # integer.
-        object_address = struct.unpack_from(">I", 
-            symbol_file_contents, read_length)[0]
-
-        read_length += 4
-
-        # This is the part that is different between all symbol file
-        # formats.  So we read the first byte to make sure we know what's 
-        # next.
-        object_name_check = struct.unpack_from(">B", 
-            symbol_file_contents, read_length)[0]
-
-        # If we see a 0x80 then this is a class index with a null-terminated
-        # method or property. The index is used to lookup a class name based
-        # on the order of names at the bottom of the file.
-        if object_name_check == 0x80:
-            read_length += 1
-
-            class_name_index = struct.unpack_from(">H",
-                symbol_file_contents, read_length)[0]
-
-            read_length += 2
-
-            string_length = \
-               (symbol_file_contents[read_length:]).find(b"\x00")
-
-            object_name = symbol_file_contents[
-                read_length:(read_length + string_length)]
-            
-            read_length += string_length + 1
-
-            if class_name_index < len(class_names):
-                object_name = \
-                   str(class_names[class_name_index]) + "::" + str(object_name)
-            else:
-                msg("object_name", object_name)
-                object_name = \
-                   "Unknown_Class::" + str(object_name)
-                
-        
-        # The "TIMN" symbol file has the string length in front of the
-        # object-name string.
-        elif symbol_file_version == 2:
-            read_length += 1
-
-            string_length = object_name_check
-
-            object_name = symbol_file_contents[
-                read_length:(read_length + string_length)]
-
-            read_length += string_length
-        # Otherwise we read a null-terminated object-name string.
-        else:
-            string_length = \
-               (symbol_file_contents[read_length:]).find(b"\x00")
-
-            object_name = symbol_file_contents[
-                read_length:(read_length + string_length)]
-
-            read_length += string_length + 1
-
-        if object_name in object_names.keys():
-            object_name = str(object_name) + "_Dup" + str(random.randint(0, 1024))
-
-        object_names[object_name] = 1
-
-        symbols[object_address] = object_name
+def detect_symbol_data_type(file_path):
+    symbol_data_type = SYMBOL_DATA_TYPE.UNKNOWN
     
-    msg("Read '" + str(len(symbols)) + "' symbols.\n")
+    with open(file_path, "rb") as hFILE:
+        start = hFILE.read(0x04)
+
+        # The symbol file format can be found by checking the first 4 bytes of the file
+        version_check = struct.unpack_from(">I", start, 0x0000)[0]
+
+    # Format that isn't used much.  This seems to be the first symbol file format used.
+    # These files start with "TIMN" or "timn" Probably named after "Tim Nicholas" who worked on parts of the WebTV debugger.
+    #
+    #    Bytes 0x00-0x04[uint32]: Data version magic (TIMN or timn)
+    #    Bytes 0x04-0x08[uint32]: Symbol count
+    #    Bytes 0x08-XXXX[      ]: Symbols that are a 3tuple of a uint32 address, uint8 name string length and a name string
+    #
+    if version_check == 0x54494d4e or version_check == 0x74696d6e:
+        symbol_data_type = SYMBOL_DATA_TYPE.EARLY_FORMAT1
+    # Symbol file that starts with the symbol data without any header.
+    #
+    #    Bytes 0x00-XXXX[      ]: Symbols that are pairs of a uint32 address and a null-terminated name string
+    #
+    elif (version_check & 0xFF000000) == 0x80000000:
+        symbol_data_type = SYMBOL_DATA_TYPE.PRODUCTION0
+    # This is the most common symbol file format and seems to be what Microsoft settled on.
+    # Classes are named at the bottom of the file.
+    #
+    #    Bytes 0x00-0x04[uint32]: Data version (seems to be always 0x00000001 but I assume they intended this to be a version number)
+    #    Bytes 0x04-0x08[uint32]: Class name list offset. Class names are separated by a new line.
+    #    Bytes 0x08-0x0c[uint32]: Symbol count
+    #    Bytes 0x0c-XXXX[      ]: Symbols that are pairs of a uint32 address, possible class name index, and a null-terminated name string
+    #
+    elif version_check == 1:
+        symbol_data_type = SYMBOL_DATA_TYPE.PRODUCTION1
+
+    return symbol_data_type
+
+def read_symbols(file_path):
+    symbols = {}
+    class_name_list = []
+
+    if file_path == None or file_path == "" or not os.path.isfile(file_path):
+        raise Exception("Input file '" + str(file_name) + "' doesn't seem to exist?")
+
+    echo("Checking symbol file type")
+
+    data_type = detect_symbol_data_type(file_path)
+
+    echo("Parsing symbols for symbol file of type '" + str(data_type) + "'.")
+
+    symbol_file_data = read_symbol_file(file_path)
+
+    file_data_length = len(symbol_file_data)
+    symbol_data_start = 0x0000
+    symbol_data_end = file_data_length
+
+    # Check we at least have the header and a few symbols.
+    if file_data_length <= 0x30:
+        raise Exception("Symbol data seems too short for this file?")
+
+    # Skip the header and grab the class name list (if needed)
+    if data_type == SYMBOL_DATA_TYPE.EARLY_FORMAT1:
+        symbol_data_start = 0x0008
+    elif data_type == SYMBOL_DATA_TYPE.PRODUCTION0 or data_type == SYMBOL_DATA_TYPE.UNKNOWN:
+        symbol_data_start = 0x0000
+    if data_type == SYMBOL_DATA_TYPE.PRODUCTION1:
+        class_list_offset = struct.unpack_from(">I", symbol_file_data, 0x0004)[0]
+        class_name_list = symbol_file_data[class_list_offset:].split(b"\x0a")
+
+        symbol_data_start = 0x000c
+        symbol_data_end = class_list_offset
+
+    parse_offset = symbol_data_start
+    while parse_offset < symbol_data_end:
+        symbol_address = struct.unpack_from(">I", symbol_file_data, parse_offset)[0]
+        parse_offset += 4
+
+        # This can be the class name index, name length or the first character of the symbol name
+        byte_check = struct.unpack_from(">B", symbol_file_data, parse_offset)[0]
+
+        name_length = 0
+        class_name = ""
+        if data_type == SYMBOL_DATA_TYPE.EARLY_FORMAT1:
+            name_length = byte_check
+            parse_offset += 1
+        # If the next byte is 0x80 (when we expect an ASCII char) then we need to prepend a class name
+        elif byte_check == 0x80 and data_type == SYMBOL_DATA_TYPE.PRODUCTION1:
+            parse_offset += 1
+
+            class_name_index = struct.unpack_from(">H", symbol_file_data, parse_offset)[0]
+            parse_offset += 2
+
+            if class_name_index < len(class_name_list):
+                class_name = class_name_list[class_name_index]
+            else:
+                class_name = "UNKNOWN_CLASS"
+
+            name_length = (symbol_file_data[parse_offset:]).find(b"\x00")
+        else:
+            name_length = (symbol_file_data[parse_offset:]).find(b"\x00")
+
+        symbol_name = ""
+        if name_length > 0:
+            symbol_name = symbol_file_data[parse_offset:(parse_offset + name_length)].decode('utf-8')
+
+            parse_offset += len(symbol_name)
+
+        # Skip the null character used to terminate the name string
+        if data_type != SYMBOL_DATA_TYPE.EARLY_FORMAT1:
+            parse_offset += 1
+
+        if class_name != "":
+            symbol_name = class_name.decode('utf-8') + "::" + symbol_name
+
+        if symbol_name in symbols:
+            symbols[symbol_name].append(symbol_address)
+        else:
+            symbols[symbol_name] = [symbol_address]
 
     return symbols
 
-# Assign names to addresses based on a symbol list.
-def import_symbols(symbols):
-    msg("Importing symbols into IDA.\n")
+#####################################################
+#####################################################
+#####################################################
+#####################################################
 
-    for object_address in symbols.keys():
-        set_name(object_address, str(symbols[object_address]), idc.SN_NOCHECK | idc.SN_PUBLIC | idc.SN_NOWARN)
+# Assign IDA names to addresses based on a symbol list.
+def import_symbols_into_ida(symbols):
+    echo("Importing symbols into IDA.")
 
-    msg("Done importing.\n")
+    for object_name in symbols.keys():
+        for object_address in symbols[object_name]:
+            set_name(object_address, object_name, idc.SN_NOCHECK | idc.SN_PUBLIC | idc.SN_NOWARN)
 
-msg("START: Eric's symbol file loader.\n")
+    echo("Done importing.")
 
-# Show a prompt to the user allowing them to select the symbol file.
-file_name = ask_file(0, "*.sym", "WebTV Build Symbol File")
+# Assign Ghidra names to addresses based on a symbol list.
+def import_symbols_into_ghidra(symbols):
+    echo("Importing symbols into Ghidra.")
+    
+    functionManager = currentProgram.getFunctionManager()
+    
+    for object_name in symbols.keys():
+        for object_address in symbols[object_name]:
+            ghidra_address = toAddr(object_address)
+            ghidra_name = re.sub(r"[^!-~]", "_", object_name)
 
-if file_name != "":
-    symbols = read_symbols(file_name)
+            if re.search(r"^k[A-Z]", ghidra_name) != None or re.search(r"^g[A-Z]", ghidra_name) != None:
+                createLabel(ghidra_address, ghidra_name, True)
+            else:
+                func = functionManager.getFunctionAt(ghidra_address)
+                if func != None:
+                    func.setName(ghidra_name, USER_DEFINED)
+                else:
+                    func = createFunction(ghidra_address, ghidra_name)
 
-    import_symbols(symbols)
+    echo("Done importing.")
+
+# Assign Ghidra names to addresses based on a symbol list.
+def output_symbols_to_file(file_path, symbols):
+    echo("Outpitting symbols to a file.")
+
+    file_data = ""
+    for object_name in symbols.keys():
+        for object_address in symbols[object_name]:
+            object_name = re.sub(r"[^!-~]", "_", object_name)
+
+            file_data += object_name + " " + hex(object_address) + "\n"
+
+    open(file_path, "w").write(file_data)
+
+    echo("Done.")
+
+#####################################################
+#####################################################
+#####################################################
+#####################################################
+
+echo("== eMac's symbol file loader ==")
+
+if output_mode == OUTPUT_MODE.IDA:
+    # Show a prompt to the user allowing them to select the symbol file.
+    file_path = ask_file(0, "*.*", "WebTV Build Symbol File")
+
+    if file_path != None and file_path != "":
+        symbols = read_symbols(file_path)
+        import_symbols_into_ida(symbols)
+    else:
+        echo("No symbol file selected. Exiting")
+elif output_mode == OUTPUT_MODE.GHIDRA:
+    # Show a prompt to the user allowing them to select the symbol file.
+    file = askFile("WebTV Build Symbol File", "Import")
+
+    if file != None and file.absolutePath != "":
+        symbols = read_symbols(file.absolutePath)
+        import_symbols_into_ghidra(symbols)
+    else:
+        echo("No symbol file selected. Exiting")
 else:
-    msg("No symbol file selected. Exiting\n")
+    if len(sys.argv) >= 3:
+        symbols = read_symbols(sys.argv[1])
+        output_symbols_to_file(sys.argv[2], symbols)
+    else:
+        echo("Not enough arguments. Please run this as '" + sys.argv[0] + " INPUT_FILE OUTPUT_FILE'")
 
